@@ -86,10 +86,38 @@ def take_screenshots():
             
         browser.close()
 
+def get_folder_size(folder_path="screenshots"):
+    """计算文件夹总大小，返回 MB"""
+    total_size = 0
+    if not os.path.exists(folder_path):
+        return 0
+    for dirpath, dirnames, filenames in os.walk(folder_path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            if not os.path.islink(fp):
+                total_size += os.path.getsize(fp)
+    return total_size / (1024 * 1024)  # 转换为 MB
+
+def get_folder_size(folder_path="screenshots"):
+    """计算文件夹总大小，返回 MB"""
+    total_size = 0
+    if not os.path.exists(folder_path):
+        return 0
+    for dirpath, dirnames, filenames in os.walk(folder_path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            if not os.path.islink(fp):
+                total_size += os.path.getsize(fp)
+    return total_size / (1024 * 1024)
+
 def send_to_feishu():
-    # 动态构建飞书群的富文本排版
+    # 自动计算当前截图文件夹的大小
+    folder_size_mb = get_folder_size("screenshots")
+
+    # 动态构建飞书群的富文本排版，加入容量监控
     feishu_content = [
-        [{"tag": "text", "text": f"📅 抓取日期: {today_str}\n\n"}]
+        [{"tag": "text", "text": f"📅 抓取日期: {today_str}\n"}],
+        [{"tag": "text", "text": f"💽 图库占用: {folder_size_mb:.2f} MB / 1000 MB\n\n"}]
     ]
     
     # 把刚才抓的所有页面，一段一段拼接到消息体里
@@ -97,11 +125,11 @@ def send_to_feishu():
         pc_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{data['pc']}"
         mobile_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{data['mobile']}"
         
-        feishu_content.append([{"tag": "text", "text": f"🎯 【{page_name}】"}])
-        feishu_content.append([{"tag": "text", "text": f"🔗 链接: {data['url']}"}])
-        feishu_content.append([{"tag": "a", "text": "👉 查看 [PC端] 高清原图", "href": pc_url}])
-        feishu_content.append([{"tag": "a", "text": "👉 查看 [移动端] 高清原图", "href": mobile_url}])
-        feishu_content.append([{"tag": "text", "text": "\n-----------------------\n"}])
+        feishu_content.append([{"tag": "text", "text": f"🎯 【{page_name}】\n"}])
+        feishu_content.append([{"tag": "text", "text": f"🔗 链接: {data['url']}\n"}])
+        feishu_content.append([{"tag": "a", "text": "👉 查看 [PC端] 高清原图", "href": pc_url}, {"tag": "text", "text": "\n"}])
+        feishu_content.append([{"tag": "a", "text": "👉 查看 [移动端] 高清原图", "href": mobile_url}, {"tag": "text", "text": "\n"}])
+        feishu_content.append([{"tag": "text", "text": "-----------------------\n"}])
 
     payload = {
         "msg_type": "post",
