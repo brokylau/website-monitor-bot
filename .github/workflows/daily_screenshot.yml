@@ -1,0 +1,44 @@
+name: Daily Screenshot & Feishu Bot
+
+on:
+  schedule:
+    # 定时器：这里的 cron 使用的是 UTC 时间！
+    # 如果想在北京时间(UTC+8) 每天早上 9:00 运行，这里应填入 UTC 时间的 1:00 (9 - 8 = 1)
+    - cron: '0 1 * * *'
+  workflow_dispatch: # 这个神奇的指令允许我们在网页上手动点击按钮立即运行测试！
+
+permissions:
+  contents: write # 极度重要：赋予机器人将生成的图片 Push 回仓库的权限
+
+jobs:
+  run-screenshot-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright requests
+          playwright install chromium --with-deps
+
+      - name: Run Screenshot Script
+        env:
+          # 将我们刚才在 Secrets 里存的飞书链接提取出来，喂给 Python 脚本
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }} 
+        run: python screenshot_bot.py
+
+      - name: Commit and Push Images to Repo
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add screenshots/
+          # 加上 [skip ci] 防止 push 行为再次触发新的 actions 无限循环
+          git commit -m "Auto-update daily screenshots [skip ci]" || echo "No changes to commit"
+          git push
