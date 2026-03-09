@@ -4,7 +4,7 @@ on:
   schedule:
     # 定时器：这里的 cron 使用的是 UTC 时间！
     # 如果想在北京时间(UTC+8) 每天早上 9:17 运行，这里应填入 UTC 时间的 1:17 (9 - 8 = 1)
-    - cron: '17 1 * * *'
+    - cron: '50 2 * * *'
   workflow_dispatch: # 这个神奇的指令允许我们在网页上手动点击按钮立即运行测试！
 
 permissions:
