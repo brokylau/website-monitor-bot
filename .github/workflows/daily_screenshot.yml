@@ -42,3 +42,4 @@ jobs:
           # 加上 [skip ci] 防止 push 行为再次触发新的 actions 无限循环
           git commit -m "Auto-update daily screenshots [skip ci]" || echo "No changes to commit"
           git push
+# 强制刷新系统测试
