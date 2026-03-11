@@ -2,11 +2,9 @@ name: Daily Screenshot & Feishu Bot
 
 on:
   schedule:
-    - cron: '45 2 * * *'
+    - cron: '49 0 * * *'
   workflow_dispatch:
-  push:             # 👈 新增这一行：监听代码推送
-    branches:
-      - main        # 👈 新增这一行：只监听 main 分支的改动
+
 
 permissions:
   contents: write # 极度重要：赋予机器人将生成的图片 Push 回仓库的权限
