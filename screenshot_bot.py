@@ -22,7 +22,7 @@ today_str = datetime.datetime.now().strftime("%Y-%m-%d")
 screenshots_data = {}
 
 def cleanup_old_screenshots(folder_path="screenshots", days_to_keep=7):
-    """🧹 核心清理函数：通过提取文件名里的日期，删除 7 天前的旧图"""
+    """🧹 清理 7 天前的旧图"""
     print(f"\n🔍 开始检查并清理 {days_to_keep} 天前的旧截图...")
     if not os.path.exists(folder_path):
         return
@@ -38,39 +38,58 @@ def cleanup_old_screenshots(folder_path="screenshots", days_to_keep=7):
             try:
                 file_date = datetime.datetime.strptime(file_date_str, "%Y-%m-%d")
                 delta = today - file_date
-                
                 if delta.days > days_to_keep:
-                    file_path = os.path.join(folder_path, filename)
-                    os.remove(file_path)
+                    os.remove(os.path.join(folder_path, filename))
                     print(f"  🗑️ 已删除过期文件: {filename}")
                     deleted_count += 1
             except ValueError:
                 pass 
                 
     if deleted_count == 0:
-        print("  ✨ 没有发现需要清理的旧图。")
+        print("  ✨ 没有需要清理的旧图。")
     else:
-        print(f"  ✅ 清理完成！共删除了 {deleted_count} 张旧图。")
+        print(f"  ✅ 清理完成！删除了 {deleted_count} 张旧图。")
 
 def scroll_to_bottom(page):
-    """🤖 模拟真人缓慢滚动到底部，彻底触发所有懒加载图片"""
-    print("    正在缓慢向下滚动以加载图片...")
+    """🤖 模拟真人缓慢滚动到底部"""
+    print("    正在向下滚动加载图片...")
     while True:
         page.evaluate("window.scrollBy(0, window.innerHeight);")
         page.wait_for_timeout(1500) 
-        
         new_height = page.evaluate("document.body.scrollHeight")
         scrolled_y = page.evaluate("window.scrollY + window.innerHeight")
-        
         if scrolled_y >= new_height:
             break
-            
     page.evaluate("window.scrollTo(0, 0);")
     page.wait_for_timeout(1000)
 
 def take_screenshots():
     os.makedirs("screenshots", exist_ok=True)
     
+    # 🌟 核心探针代码：获取真实的元素状态和比例
+    js_check_script = """
+    () => {
+        let status = { nav_display: 'MISSING', banner_ratio: 0, banner_missing: true };
+
+        // 1. 获取导航栏状态
+        let navToggle = document.querySelector('div[data-action="toggle-nav"]');
+        if (navToggle) {
+            status.nav_display = window.getComputedStyle(navToggle).display;
+        }
+
+        // 2. 获取 Banner 真实宽高比例
+        let banner = document.querySelector('.banner__media');
+        if (banner) {
+            let rect = banner.getBoundingClientRect();
+            if (rect.height > 0) {
+                status.banner_ratio = rect.width / rect.height;
+                status.banner_missing = false;
+            }
+        }
+        return status;
+    }
+    """
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         
@@ -81,55 +100,38 @@ def take_screenshots():
             pc_path = f"screenshots/pc_{safe_name}_{today_str}.png"
             mobile_path = f"screenshots/mobile_{safe_name}_{today_str}.png"
             
-            # === 1. PC 端抓取 ===
-            print(f"  🖥️  正在截取 PC 端...")
+            # === 1. PC 端抓取与检测 ===
+            print(f"  🖥️  正在截取 PC 端并执行检测...")
             context_pc = browser.new_context(viewport={"width": 1920, "height": 1080})
             page_pc = context_pc.new_page()
             page_pc.goto(url, wait_until="networkidle")
             scroll_to_bottom(page_pc) 
+            pc_result = page_pc.evaluate(js_check_script)
             page_pc.screenshot(path=pc_path, full_page=True)
             context_pc.close()
             
             time.sleep(2)
             
-            # === 2. 移动端抓取 ===
-            print(f"  📱 正在截取 移动端...")
+            # === 2. 移动端抓取与检测 ===
+            print(f"  📱 正在截取 移动端并执行检测...")
             iphone_13 = p.devices['iPhone 13 Pro']
             context_mobile = browser.new_context(**iphone_13)
             page_mobile = context_mobile.new_page()
             page_mobile.goto(url, wait_until="networkidle")
             scroll_to_bottom(page_mobile) 
-            
-            # 🌟 核心新增：向移动端注入 JS 判断导航栏状态
-            js_check_script = """
-            () => {
-                var navToggle = document.querySelector('div[data-action="toggle-nav"]');
-                if (!navToggle) return 'MISSING';
-                return window.getComputedStyle(navToggle).display;
-            }
-            """
-            nav_display_status = page_mobile.evaluate(js_check_script)
-            
-            # 判断逻辑：如果是 none，说明移动端加载了 PC 版
-            is_mobile_error = (nav_display_status == 'none')
-            if is_mobile_error:
-                print(f"    🚨 警告：检测到移动端渲染了 PC 样式！(display: none)")
-            else:
-                print(f"    ✅ 移动端渲染检查正常。(display: {nav_display_status})")
-
+            mobile_result = page_mobile.evaluate(js_check_script)
             page_mobile.screenshot(path=mobile_path, full_page=True)
             context_mobile.close()
             
-            # 将判定结果存入字典，留给飞书推送使用
             screenshots_data[page_name] = {
                 "url": url, 
-                "pc": pc_path, 
-                "mobile": mobile_path,
-                "is_mobile_error": is_mobile_error,
-                "nav_status": nav_display_status
+                "pc_path": pc_path, 
+                "mobile_path": mobile_path,
+                "pc_result": pc_result,
+                "mobile_result": mobile_result
             }
             
-            print(f"  💤 休息 3 秒钟防反爬...")
+            print(f"  💤 休息 3 秒...")
             time.sleep(3) 
             
         browser.close()
@@ -146,36 +148,70 @@ def get_folder_size(folder_path="screenshots"):
                 total_size += os.path.getsize(fp)
     return total_size / (1024 * 1024)
 
+# ==== 飞书文本格式化辅助函数 ====
+def format_status_text(device, result):
+    is_error = False
+    
+    # 1. 导航栏判断
+    if device == 'pc':
+        nav_ok = (result['nav_display'] == 'none')
+        nav_str = "导航栏toggle隐藏 ✅" if nav_ok else f"导航栏toggle状态异常({result['nav_display']}) ❌"
+    else: # mobile
+        nav_ok = (result['nav_display'] not in ['none', 'MISSING'])
+        nav_str = "导航栏toggle加载正常 ✅" if nav_ok else "导航栏toggle隐藏/丢失 ❌"
+        
+    if not nav_ok: is_error = True
+
+    # 2. Banner 判断
+    if result['banner_missing']:
+        banner_str = "banner丢失 ❌"
+        is_error = True
+    else:
+        ratio = result['banner_ratio']
+        if device == 'pc':
+            banner_ok = (ratio > 1.2) # PC应该是横图
+        else:
+            banner_ok = (ratio <= 1.2) # 手机应该是竖图
+            
+        banner_icon = "✅" if banner_ok else "❌"
+        banner_str = f"banner比例为{ratio:.2f} {banner_icon}"
+        if not banner_ok: is_error = True
+
+    # 3. 最终文本拼接
+    if device == 'pc':
+        title = "pc端渲染正常" if not is_error else "pc端渲染异常"
+    else:
+        title = "移动端渲染正常" if not is_error else "移动端渲染异常"
+        
+    return f"{title}（{nav_str}，{banner_str}）", is_error
+
 def send_to_feishu():
     folder_size_mb = get_folder_size("screenshots")
     
-    # 构造 Markdown 文本
     md_text = f"**🗓️ 抓取日期:** {today_str}\n"
     md_text += f"**💽 图库占用:** {folder_size_mb:.2f} MB / 1000 MB *(已自动清理7天前旧图)*\n\n---\n\n"
     
     has_global_error = False
 
     for page_name, data in screenshots_data.items():
-        pc_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{data['pc']}"
-        mobile_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{data['mobile']}"
+        pc_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{data['pc_path']}"
+        mobile_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{data['mobile_path']}"
         page_url = data['url']
         
-        # 根据 JS 检查结果设置对应的文案和表情
-        if data["is_mobile_error"]:
+        # 使用辅助函数格式化双端文案
+        pc_text, pc_is_error = format_status_text('pc', data['pc_result'])
+        mb_text, mb_is_error = format_status_text('mobile', data['mobile_result'])
+        
+        if pc_is_error or mb_is_error:
             has_global_error = True
-            status_text = "🚨 **异常预警：移动端呈现了PC版代码！**"
-        elif data["nav_status"] == 'MISSING':
-            status_text = "⚠️ **元素丢失：未找到导航栏进行验证**"
-        else:
-            status_text = "✅ **移动端渲染正常**"
 
-        md_text += f"🎯 **【{page_name}】** {status_text}\n"
+        md_text += f"🎯 **【{page_name}】**\n"
+        md_text += f"🖥️ **PC端:** {pc_text}\n"
+        md_text += f"📱 **移动端:** {mb_text}\n"
         md_text += f"👉 [🌐 线上页面]({page_url}) ｜ [💻 PC端截图]({pc_url}) ｜ [📱 移动端截图]({mobile_url})\n\n"
 
-    # 根据是否有异常，决定卡片头部的颜色（有报错就红，没报错就绿）
     card_color = "red" if has_global_error else "green"
 
-    # 使用 Interactive Card 高级格式
     payload = {
         "msg_type": "interactive",
         "card": {
