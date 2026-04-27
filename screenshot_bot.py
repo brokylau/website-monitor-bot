@@ -66,24 +66,26 @@ def scroll_to_bottom(page):
 def take_screenshots():
     os.makedirs("screenshots", exist_ok=True)
     
-    # 🌟 核心探针代码：获取真实的元素状态和比例
+    # 🌟 核心探针代码：接收 is_home 参数，动态决定是否检查 Banner
     js_check_script = """
-    () => {
+    (is_home) => {
         let status = { nav_display: 'MISSING', banner_ratio: 0, banner_missing: true };
 
-        // 1. 获取导航栏状态
+        // 1. 获取导航栏状态 (所有页面都要查)
         let navToggle = document.querySelector('div[data-action="toggle-nav"]');
         if (navToggle) {
             status.nav_display = window.getComputedStyle(navToggle).display;
         }
 
-        // 2. 获取 Banner 真实宽高比例
-        let banner = document.querySelector('.banner__media');
-        if (banner) {
-            let rect = banner.getBoundingClientRect();
-            if (rect.height > 0) {
-                status.banner_ratio = rect.width / rect.height;
-                status.banner_missing = false;
+        // 2. 获取 Banner 真实宽高比例 (仅首页查)
+        if (is_home) {
+            let banner = document.querySelector('.banner__media');
+            if (banner) {
+                let rect = banner.getBoundingClientRect();
+                if (rect.height > 0) {
+                    status.banner_ratio = rect.width / rect.height;
+                    status.banner_missing = false;
+                }
             }
         }
         return status;
@@ -100,13 +102,17 @@ def take_screenshots():
             pc_path = f"screenshots/pc_{safe_name}_{today_str}.png"
             mobile_path = f"screenshots/mobile_{safe_name}_{today_str}.png"
             
+            # 判断当前页面是否为主页
+            is_home_page = (page_name == "主页")
+            
             # === 1. PC 端抓取与检测 ===
             print(f"  🖥️  正在截取 PC 端并执行检测...")
             context_pc = browser.new_context(viewport={"width": 1920, "height": 1080})
             page_pc = context_pc.new_page()
             page_pc.goto(url, wait_until="networkidle")
             scroll_to_bottom(page_pc) 
-            pc_result = page_pc.evaluate(js_check_script)
+            # 传入 is_home_page 参数
+            pc_result = page_pc.evaluate(js_check_script, is_home_page)
             page_pc.screenshot(path=pc_path, full_page=True)
             context_pc.close()
             
@@ -119,7 +125,8 @@ def take_screenshots():
             page_mobile = context_mobile.new_page()
             page_mobile.goto(url, wait_until="networkidle")
             scroll_to_bottom(page_mobile) 
-            mobile_result = page_mobile.evaluate(js_check_script)
+            # 传入 is_home_page 参数
+            mobile_result = page_mobile.evaluate(js_check_script, is_home_page)
             page_mobile.screenshot(path=mobile_path, full_page=True)
             context_mobile.close()
             
@@ -149,7 +156,7 @@ def get_folder_size(folder_path="screenshots"):
     return total_size / (1024 * 1024)
 
 # ==== 飞书文本格式化辅助函数 ====
-def format_status_text(device, result):
+def format_status_text(device, result, page_name):
     is_error = False
     
     # 1. 导航栏判断
@@ -162,20 +169,22 @@ def format_status_text(device, result):
         
     if not nav_ok: is_error = True
 
-    # 2. Banner 判断
-    if result['banner_missing']:
-        banner_str = "banner丢失 ❌"
-        is_error = True
-    else:
-        ratio = result['banner_ratio']
-        if device == 'pc':
-            banner_ok = (ratio > 1.2) # PC应该是横图
+    # 2. Banner 判断 (仅首页附加此文本)
+    banner_str = ""
+    if page_name == "主页":
+        if result['banner_missing']:
+            banner_str = "，banner丢失 ❌"
+            is_error = True
         else:
-            banner_ok = (ratio <= 1.2) # 手机应该是竖图
-            
-        banner_icon = "✅" if banner_ok else "❌"
-        banner_str = f"banner比例为{ratio:.2f} {banner_icon}"
-        if not banner_ok: is_error = True
+            ratio = result['banner_ratio']
+            if device == 'pc':
+                banner_ok = (ratio > 1.2) # PC应该是横图
+            else:
+                banner_ok = (ratio <= 1.2) # 手机应该是竖图
+                
+            banner_icon = "✅" if banner_ok else "❌"
+            banner_str = f"，banner比例为{ratio:.2f} {banner_icon}"
+            if not banner_ok: is_error = True
 
     # 3. 最终文本拼接
     if device == 'pc':
@@ -183,7 +192,7 @@ def format_status_text(device, result):
     else:
         title = "移动端渲染正常" if not is_error else "移动端渲染异常"
         
-    return f"{title}（{nav_str}，{banner_str}）", is_error
+    return f"{title}（{nav_str}{banner_str}）", is_error
 
 def send_to_feishu():
     folder_size_mb = get_folder_size("screenshots")
@@ -198,9 +207,9 @@ def send_to_feishu():
         mobile_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{data['mobile_path']}"
         page_url = data['url']
         
-        # 使用辅助函数格式化双端文案
-        pc_text, pc_is_error = format_status_text('pc', data['pc_result'])
-        mb_text, mb_is_error = format_status_text('mobile', data['mobile_result'])
+        # 使用辅助函数格式化双端文案，传入 page_name 判定是否是主页
+        pc_text, pc_is_error = format_status_text('pc', data['pc_result'], page_name)
+        mb_text, mb_is_error = format_status_text('mobile', data['mobile_result'], page_name)
         
         if pc_is_error or mb_is_error:
             has_global_error = True
