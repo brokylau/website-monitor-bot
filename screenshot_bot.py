@@ -72,7 +72,7 @@ def take_screenshots():
         let status = { nav_display: 'MISSING', banner_ratio: 0, banner_missing: true };
 
         // 1. 获取导航栏状态 (所有页面都要查)
-        let navToggle = document.querySelector('div[data-action="toggle-nav"]');
+        let navToggle = document.querySelector('button[data-action="toggle-nav"]');
         if (navToggle) {
             status.nav_display = window.getComputedStyle(navToggle).display;
         }
