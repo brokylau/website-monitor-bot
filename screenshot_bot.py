@@ -27,8 +27,18 @@ GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
 AIHOT_FEED_URL = "https://aihot.virxact.com/feed.xml"
 AIHOT_HOME_URL = "https://aihot.virxact.com/"
 AIHOT_STATE_FILE = os.getenv("AIHOT_STATE_FILE", "aihot_state.json")
-AIHOT_MAX_ITEMS = int(os.getenv("AIHOT_MAX_ITEMS", "10"))
-AIHOT_MIN_SCORE = int(os.getenv("AIHOT_MIN_SCORE", "70"))
+def get_int_env(name, default):
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"⚠️ 环境变量 {name}={value} 不是有效数字，使用默认值 {default}")
+        return default
+
+AIHOT_MAX_ITEMS = get_int_env("AIHOT_MAX_ITEMS", 10)
+AIHOT_MIN_SCORE = get_int_env("AIHOT_MIN_SCORE", 70)
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 AIHOT_ALLOWED_CATEGORIES = {
