@@ -38,7 +38,6 @@ def get_int_env(name, default):
         return default
 
 AIHOT_MAX_ITEMS = get_int_env("AIHOT_MAX_ITEMS", 10)
-AIHOT_MIN_SCORE = get_int_env("AIHOT_MIN_SCORE", 70)
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 AIHOT_ALLOWED_CATEGORIES = {
@@ -475,21 +474,11 @@ def get_aihot_incremental_items(all_items):
     return all_items, "checkpoint_missing_latest_50", len(all_items)
 
 def filter_aihot_items(items):
-    filtered = []
+    if not items:
+        return []
 
-    for item in items:
-        categories = item.get("categories", [])
-        score = item.get("score", 0)
-
-        category_hit = any(
-            category in AIHOT_ALLOWED_CATEGORIES
-            for category in categories
-        )
-
-        if category_hit and score >= AIHOT_MIN_SCORE:
-            filtered.append(item)
-
-    filtered.sort(
+    ranked_items = sorted(
+        items,
         key=lambda item: (
             item.get("score", 0),
             item.get("published_at") or datetime.datetime.min.replace(tzinfo=CN_TZ)
@@ -497,7 +486,7 @@ def filter_aihot_items(items):
         reverse=True
     )
 
-    return filtered[:AIHOT_MAX_ITEMS]
+    return ranked_items[:AIHOT_MAX_ITEMS]
 
 def format_aihot_item(item, index):
     title = item["title"] or "未命名资讯"
@@ -540,7 +529,7 @@ def send_aihot_to_feishu():
             md_text += "（feed 为空）"
 
         md_text += "\n"
-        md_text += f"**🎚️ 筛选:** 评分 ≥ {AIHOT_MIN_SCORE}，仅展示重点分类\n"
+        md_text += f"**🎚️ 筛选:** 按评分排序，展示前 {AIHOT_MAX_ITEMS} 条\n"
         md_text += f"**📬 本次展示:** {len(selected_items)} 条\n\n---\n\n"
 
         if selected_items:
