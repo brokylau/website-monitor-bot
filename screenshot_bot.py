@@ -578,7 +578,12 @@ def send_aihot_to_feishu():
         print(f"\n⚠️ AI HOT 资讯推送失败，不影响页面监控日报: {e}")
 
 if __name__ == "__main__":
-    cleanup_old_screenshots(days_to_keep=7)
-    take_screenshots()
-    send_to_feishu()
+    try:
+        cleanup_old_screenshots(days_to_keep=7)
+        take_screenshots()
+        send_to_feishu()
+    except Exception as e:
+        print(f"\n⚠️ 页面监控日报失败，不影响 AI HOT 资讯推送: {e}")
+
     send_aihot_to_feishu()
+
