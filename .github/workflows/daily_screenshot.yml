@@ -31,6 +31,8 @@ jobs:
         env:
           # 将我们刚才在 Secrets 里存的飞书链接提取出来，喂给 Python 脚本
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }} 
+          AIHOT_MAX_ITEMS: ${{ vars.AIHOT_MAX_ITEMS }}
+          AIHOT_MIN_SCORE: ${{ vars.AIHOT_MIN_SCORE }}
         run: python screenshot_bot.py
 
       - name: Commit and Push Images to Repo
