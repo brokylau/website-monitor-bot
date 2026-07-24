@@ -133,7 +133,15 @@ def take_screenshots():
     """
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # 🟢 优化 1：启动浏览器时，禁用自动化控制特征
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled", # 核心防封参数
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
 
         for page_name, url in TARGET_PAGES.items():
             print(f"\n🚀 开始抓取: {page_name} - {url}")
@@ -145,8 +153,18 @@ def take_screenshots():
             is_home_page = (page_name == "主页")
 
             print(f"  🖥️  正在截取 PC 端并执行检测...")
-            context_pc = browser.new_context(viewport={"width": 1920, "height": 1080})
+            
+            # 🟢 优化 2：PC 端强制使用真实的 User-Agent 和 常见浏览器的请求头
+            context_pc = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
+            )
             page_pc = context_pc.new_page()
+            
+            # 🟢 优化 3：在页面加载前注入 JS，彻底抹除 window.navigator.webdriver 机器人特征
+            page_pc.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
             page_pc.goto(url, wait_until="networkidle")
             scroll_to_bottom(page_pc)
             pc_result = page_pc.evaluate(js_check_script, is_home_page)
@@ -157,8 +175,17 @@ def take_screenshots():
 
             print(f"  📱 正在截取 移动端并执行检测...")
             iphone_13 = p.devices['iPhone 13 Pro']
-            context_mobile = browser.new_context(**iphone_13)
+            
+            # 移动端补充请求头
+            context_mobile = browser.new_context(
+                **iphone_13,
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
+            )
             page_mobile = context_mobile.new_page()
+            
+            # 移动端同样抹除机器人特征
+            page_mobile.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
             page_mobile.goto(url, wait_until="networkidle")
             scroll_to_bottom(page_mobile)
             mobile_result = page_mobile.evaluate(js_check_script, is_home_page)
