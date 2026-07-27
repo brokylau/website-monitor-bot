@@ -6,6 +6,7 @@ import re
 import html
 import json
 import hashlib
+import random
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
@@ -93,18 +94,200 @@ def cleanup_old_screenshots(folder_path="screenshots", days_to_keep=7):
     else:
         print(f"  ✅ 清理完成！删除了 {deleted_count} 张旧图。")
 
-def scroll_to_bottom(page):
-    """🤖 模拟真人缓慢滚动到底部"""
+# 页面抓取稳定性配置
+MAX_GOTO_ATTEMPTS = get_int_env("MAX_GOTO_ATTEMPTS", 4)
+RATE_LIMIT_BASE_WAIT_SECONDS = get_int_env("RATE_LIMIT_BASE_WAIT_SECONDS", 30)
+PAGE_GAP_MIN_SECONDS = get_int_env("PAGE_GAP_MIN_SECONDS", 10)
+PAGE_GAP_MAX_SECONDS = get_int_env("PAGE_GAP_MAX_SECONDS", 20)
+
+RATE_LIMIT_MARKERS = (
+    "local_rate_limited",
+    "too many requests",
+    "rate limit exceeded",
+)
+
+def scroll_to_bottom(page, max_steps=40):
+    """缓慢滚动加载懒加载内容，并设置最大步数，避免动态页面无限循环。"""
     print("    正在向下滚动加载图片...")
-    while True:
-        page.evaluate("window.scrollBy(0, window.innerHeight);")
-        page.wait_for_timeout(1500)
+    stable_rounds = 0
+    previous_height = 0
+
+    for _ in range(max_steps):
+        current_height = page.evaluate("document.body.scrollHeight")
+        page.evaluate("window.scrollBy(0, Math.max(window.innerHeight * 0.85, 600));")
+        page.wait_for_timeout(900)
+
         new_height = page.evaluate("document.body.scrollHeight")
         scrolled_y = page.evaluate("window.scrollY + window.innerHeight")
-        if scrolled_y >= new_height:
+
+        if new_height == previous_height:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+
+        previous_height = new_height
+
+        if scrolled_y >= new_height - 5 and stable_rounds >= 1:
             break
+
     page.evaluate("window.scrollTo(0, 0);")
     page.wait_for_timeout(1000)
+
+
+def get_response_diagnostics(response):
+    if response is None:
+        return None, {}
+
+    status = response.status
+    try:
+        headers = response.all_headers()
+    except Exception:
+        headers = response.headers
+
+    return status, {str(k).lower(): str(v) for k, v in headers.items()}
+
+
+def calculate_retry_wait(headers, attempt):
+    retry_after = headers.get("retry-after", "").strip()
+    if retry_after.isdigit():
+        return max(int(retry_after), 1)
+
+    exponential_wait = RATE_LIMIT_BASE_WAIT_SECONDS * (2 ** (attempt - 1))
+    jitter = random.randint(3, 12)
+    return min(exponential_wait + jitter, 180)
+
+
+def goto_with_retry(page, url, page_name, device_name):
+    """检查主文档 HTTP 状态；遇到 429/local_rate_limited 时退避重试。"""
+    last_status = None
+    last_headers = {}
+    last_body = ""
+
+    for attempt in range(1, MAX_GOTO_ATTEMPTS + 1):
+        print(f"    [{device_name}] 导航尝试 {attempt}/{MAX_GOTO_ATTEMPTS}")
+
+        try:
+            response = page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+            last_status, last_headers = get_response_diagnostics(response)
+            page.wait_for_timeout(2500)
+
+            try:
+                last_body = page.locator("body").inner_text(timeout=5000).strip()
+            except Exception:
+                last_body = ""
+
+            body_lower = last_body[:1000].lower()
+            is_rate_limited = (
+                last_status == 429
+                or any(marker in body_lower for marker in RATE_LIMIT_MARKERS)
+            )
+
+            diagnostic_headers = {
+                key: last_headers.get(key)
+                for key in (
+                    "server",
+                    "via",
+                    "retry-after",
+                    "x-local-rate-limit",
+                    "x-envoy-ratelimited",
+                    "x-request-id",
+                    "cf-ray",
+                )
+                if last_headers.get(key)
+            }
+            print(
+                f"    [{device_name}] HTTP={last_status}, "
+                f"headers={diagnostic_headers or '{}'}"
+            )
+
+            if is_rate_limited:
+                if attempt >= MAX_GOTO_ATTEMPTS:
+                    break
+
+                wait_seconds = calculate_retry_wait(last_headers, attempt)
+                print(
+                    f"    ⚠️ [{device_name}] {page_name} 被限流，"
+                    f"等待 {wait_seconds} 秒后重试..."
+                )
+                page.wait_for_timeout(wait_seconds * 1000)
+                continue
+
+            if last_status is not None and last_status >= 400:
+                raise RuntimeError(
+                    f"主文档请求失败：HTTP {last_status}，"
+                    f"body={last_body[:200]!r}"
+                )
+
+            return {
+                "ok": True,
+                "status": last_status,
+                "headers": last_headers,
+                "error_type": "",
+                "error_message": "",
+            }
+
+        except Exception as exc:
+            if attempt >= MAX_GOTO_ATTEMPTS:
+                return {
+                    "ok": False,
+                    "status": last_status,
+                    "headers": last_headers,
+                    "error_type": "NAVIGATION_ERROR",
+                    "error_message": str(exc),
+                }
+
+            wait_seconds = min(15 * attempt + random.randint(2, 8), 60)
+            print(
+                f"    ⚠️ [{device_name}] 导航异常：{exc}；"
+                f"等待 {wait_seconds} 秒后重试..."
+            )
+            page.wait_for_timeout(wait_seconds * 1000)
+
+    return {
+        "ok": False,
+        "status": last_status,
+        "headers": last_headers,
+        "error_type": "RATE_LIMITED",
+        "error_message": last_body[:300] or "local_rate_limited",
+    }
+
+
+def capture_device(page, url, page_name, device_name, screenshot_path, js_check_script):
+    navigation = goto_with_retry(page, url, page_name, device_name)
+
+    if not navigation["ok"]:
+        # 保留失败页面截图，方便后续排查；但不再把它误判成导航栏/banner 异常。
+        try:
+            page.screenshot(path=screenshot_path, full_page=True)
+        except Exception as exc:
+            print(f"    ⚠️ [{device_name}] 失败页截图保存失败: {exc}")
+
+        return {
+            "fetch_ok": False,
+            "http_status": navigation.get("status"),
+            "fetch_error": navigation.get("error_type") or "UNKNOWN",
+            "fetch_message": navigation.get("error_message") or "",
+            "nav_display": "NOT_CHECKED",
+            "banner_ratio": 0,
+            "banner_missing": True,
+        }
+
+    scroll_to_bottom(page)
+    is_home_page = page_name == "主页"
+    result = page.evaluate(js_check_script, is_home_page)
+    result.update({
+        "fetch_ok": True,
+        "http_status": navigation.get("status"),
+        "fetch_error": "",
+        "fetch_message": "",
+    })
+    page.screenshot(path=screenshot_path, full_page=True)
+    return result
+
 
 def take_screenshots():
     os.makedirs("screenshots", exist_ok=True)
@@ -133,77 +316,88 @@ def take_screenshots():
     """
 
     with sync_playwright() as p:
-        # 🟢 优化 1：启动浏览器时，禁用自动化控制特征
         browser = p.chromium.launch(
             headless=True,
             args=[
-                "--disable-blink-features=AutomationControlled", # 核心防封参数
+                "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox"
-            ]
+                "--disable-setuid-sandbox",
+            ],
         )
 
-        for page_name, url in TARGET_PAGES.items():
-            print(f"\n🚀 开始抓取: {page_name} - {url}")
+        # 关键调整：PC 和移动端各复用一个 BrowserContext，不再为每个 URL 创建全新会话。
+        # 这会保留同一设备会话中的 cookie/cache，并显著降低重复资源请求。
+        context_pc = browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            locale="it-IT",
+            timezone_id="Europe/Rome",
+            extra_http_headers={"Accept-Language": "it-IT,it;q=0.9,en;q=0.7"},
+        )
 
-            safe_name = page_name.replace(' ', '_')
-            pc_path = f"screenshots/pc_{safe_name}_{today_str}.png"
-            mobile_path = f"screenshots/mobile_{safe_name}_{today_str}.png"
+        iphone_13 = p.devices["iPhone 13 Pro"]
+        context_mobile = browser.new_context(
+            **iphone_13,
+            locale="it-IT",
+            timezone_id="Europe/Rome",
+            extra_http_headers={"Accept-Language": "it-IT,it;q=0.9,en;q=0.7"},
+        )
 
-            is_home_page = (page_name == "主页")
+        init_script = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        context_pc.add_init_script(init_script)
+        context_mobile.add_init_script(init_script)
 
-            print(f"  🖥️  正在截取 PC 端并执行检测...")
-            
-            # 🟢 优化 2：PC 端强制使用真实的 User-Agent 和 常见浏览器的请求头
-            context_pc = browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
-            )
-            page_pc = context_pc.new_page()
-            
-            # 🟢 优化 3：在页面加载前注入 JS，彻底抹除 window.navigator.webdriver 机器人特征
-            page_pc.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
-            page_pc.goto(url, wait_until="networkidle")
-            scroll_to_bottom(page_pc)
-            pc_result = page_pc.evaluate(js_check_script, is_home_page)
-            page_pc.screenshot(path=pc_path, full_page=True)
+        page_pc = context_pc.new_page()
+        page_mobile = context_mobile.new_page()
+        page_pc.set_default_timeout(30000)
+        page_mobile.set_default_timeout(30000)
+
+        try:
+            for page_name, url in TARGET_PAGES.items():
+                print(f"\n🚀 开始抓取: {page_name} - {url}")
+
+                safe_name = page_name.replace(" ", "_")
+                pc_path = f"screenshots/pc_{safe_name}_{today_str}.png"
+                mobile_path = f"screenshots/mobile_{safe_name}_{today_str}.png"
+
+                print("  🖥️  正在截取 PC 端并执行检测...")
+                pc_result = capture_device(
+                    page_pc,
+                    url,
+                    page_name,
+                    "PC",
+                    pc_path,
+                    js_check_script,
+                )
+
+                between_devices = random.randint(5, 10)
+                print(f"  💤 PC 与移动端之间休息 {between_devices} 秒...")
+                time.sleep(between_devices)
+
+                print("  📱 正在截取移动端并执行检测...")
+                mobile_result = capture_device(
+                    page_mobile,
+                    url,
+                    page_name,
+                    "Mobile",
+                    mobile_path,
+                    js_check_script,
+                )
+
+                screenshots_data[page_name] = {
+                    "url": url,
+                    "pc_path": pc_path,
+                    "mobile_path": mobile_path,
+                    "pc_result": pc_result,
+                    "mobile_result": mobile_result,
+                }
+
+                gap = random.randint(PAGE_GAP_MIN_SECONDS, PAGE_GAP_MAX_SECONDS)
+                print(f"  💤 页面之间休息 {gap} 秒...")
+                time.sleep(gap)
+        finally:
             context_pc.close()
-
-            time.sleep(2)
-
-            print(f"  📱 正在截取 移动端并执行检测...")
-            iphone_13 = p.devices['iPhone 13 Pro']
-            
-            # 移动端补充请求头
-            context_mobile = browser.new_context(
-                **iphone_13,
-                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"}
-            )
-            page_mobile = context_mobile.new_page()
-            
-            # 移动端同样抹除机器人特征
-            page_mobile.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            
-            page_mobile.goto(url, wait_until="networkidle")
-            scroll_to_bottom(page_mobile)
-            mobile_result = page_mobile.evaluate(js_check_script, is_home_page)
-            page_mobile.screenshot(path=mobile_path, full_page=True)
             context_mobile.close()
-
-            screenshots_data[page_name] = {
-                "url": url,
-                "pc_path": pc_path,
-                "mobile_path": mobile_path,
-                "pc_result": pc_result,
-                "mobile_result": mobile_result
-            }
-
-            print(f"  💤 休息 3 秒...")
-            time.sleep(3)
-
-        browser.close()
+            browser.close()
 
 def get_folder_size(folder_path="screenshots"):
     """计算文件夹总大小，返回 MB"""
@@ -219,6 +413,16 @@ def get_folder_size(folder_path="screenshots"):
 
 # ==== 飞书文本格式化辅助函数 ====
 def format_status_text(device, result, page_name):
+    if not result.get("fetch_ok", True):
+        status = result.get("http_status")
+        error_type = result.get("fetch_error", "UNKNOWN")
+        status_text = f"HTTP {status}" if status is not None else "无 HTTP 状态"
+
+        if error_type == "RATE_LIMITED":
+            return f"抓取被限流（{status_text}，已完成退避重试） ❌", True
+
+        return f"抓取失败（{status_text}，{error_type}） ❌", True
+
     is_error = False
 
     if device == 'pc':
@@ -612,4 +816,3 @@ if __name__ == "__main__":
         print(f"\n⚠️ 页面监控日报失败，不影响 AI HOT 资讯推送: {e}")
 
     send_aihot_to_feishu()
-
