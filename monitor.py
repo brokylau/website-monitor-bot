@@ -296,7 +296,7 @@ def take_screenshots():
     (is_home) => {
         let status = { nav_display: 'MISSING', banner_ratio: 0, banner_missing: true };
 
-        let navToggle = document.querySelector('button[data-action="toggle-nav"]');
+        let navToggle = document.querySelector('button[aria-controls="mobile-navigation"]');
         if (navToggle) {
             status.nav_display = window.getComputedStyle(navToggle).display;
         }
