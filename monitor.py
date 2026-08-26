@@ -278,8 +278,11 @@ def capture_device(page, url, page_name, device_name, screenshot_path, js_check_
 
     scroll_to_bottom(page)
 
+    # 实测这个按钮有时要等 20+ 秒才会挂载到页面上（该站点的 load/networkidle
+    # 事件几乎不会在合理时间内触发，无法作为"页面稳定"的信号），所以直接死等
+    # 目标元素本身出现，而不是等待 load/networkidle。
     try:
-        page.wait_for_selector('button[aria-controls="mobile-navigation"]', state="attached", timeout=8000)
+        page.wait_for_selector('button[aria-controls="mobile-navigation"]', state="attached", timeout=25000)
     except Exception:
         pass
 
