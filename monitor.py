@@ -324,7 +324,7 @@ def take_screenshots():
     }
     """
 
-    with sync_playwright() as p:
+    def launch_all(p):
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -360,6 +360,29 @@ def take_screenshots():
         page_pc.set_default_timeout(30000)
         page_mobile.set_default_timeout(30000)
 
+        return browser, context_pc, context_mobile, page_pc, page_mobile
+
+    def close_all_quietly(browser, context_pc, context_mobile):
+        for closable in (context_pc, context_mobile, browser):
+            try:
+                closable.close()
+            except Exception:
+                pass
+
+    def crashed_result(exc):
+        return {
+            "fetch_ok": False,
+            "http_status": None,
+            "fetch_error": "BROWSER_CRASH",
+            "fetch_message": str(exc)[:300],
+            "nav_display": "NOT_CHECKED",
+            "banner_ratio": 0,
+            "banner_missing": True,
+        }
+
+    with sync_playwright() as p:
+        browser, context_pc, context_mobile, page_pc, page_mobile = launch_all(p)
+
         try:
             for page_name, url in TARGET_PAGES.items():
                 print(f"\n🚀 开始抓取: {page_name} - {url}")
@@ -369,28 +392,44 @@ def take_screenshots():
                 mobile_path = f"screenshots/mobile_{safe_name}_{today_str}.png"
 
                 print("  🖥️  正在截取 PC 端并执行检测...")
-                pc_result = capture_device(
-                    page_pc,
-                    url,
-                    page_name,
-                    "PC",
-                    pc_path,
-                    js_check_script,
-                )
+                try:
+                    pc_result = capture_device(
+                        page_pc,
+                        url,
+                        page_name,
+                        "PC",
+                        pc_path,
+                        js_check_script,
+                    )
+                except Exception as exc:
+                    print(f"    ⚠️ [PC] {page_name} 浏览器/页面异常，跳过该项: {exc}")
+                    pc_result = crashed_result(exc)
+                    if not browser.is_connected():
+                        print("    ⚠️ 浏览器进程已崩溃，正在重启浏览器...")
+                        close_all_quietly(browser, context_pc, context_mobile)
+                        browser, context_pc, context_mobile, page_pc, page_mobile = launch_all(p)
 
                 between_devices = random.randint(5, 10)
                 print(f"  💤 PC 与移动端之间休息 {between_devices} 秒...")
                 time.sleep(between_devices)
 
                 print("  📱 正在截取移动端并执行检测...")
-                mobile_result = capture_device(
-                    page_mobile,
-                    url,
-                    page_name,
-                    "Mobile",
-                    mobile_path,
-                    js_check_script,
-                )
+                try:
+                    mobile_result = capture_device(
+                        page_mobile,
+                        url,
+                        page_name,
+                        "Mobile",
+                        mobile_path,
+                        js_check_script,
+                    )
+                except Exception as exc:
+                    print(f"    ⚠️ [Mobile] {page_name} 浏览器/页面异常，跳过该项: {exc}")
+                    mobile_result = crashed_result(exc)
+                    if not browser.is_connected():
+                        print("    ⚠️ 浏览器进程已崩溃，正在重启浏览器...")
+                        close_all_quietly(browser, context_pc, context_mobile)
+                        browser, context_pc, context_mobile, page_pc, page_mobile = launch_all(p)
 
                 screenshots_data[page_name] = {
                     "url": url,
@@ -404,9 +443,7 @@ def take_screenshots():
                 print(f"  💤 页面之间休息 {gap} 秒...")
                 time.sleep(gap)
         finally:
-            context_pc.close()
-            context_mobile.close()
-            browser.close()
+            close_all_quietly(browser, context_pc, context_mobile)
 
 def get_folder_size(folder_path="screenshots"):
     """计算文件夹总大小，返回 MB"""
