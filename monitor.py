@@ -23,6 +23,19 @@ TARGET_PAGES = {
 
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK")
 GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
+FEISHU_DRY_RUN = os.getenv("FEISHU_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+
+
+def post_to_feishu_or_dry_run(payload, dry_run_filename):
+    """调试用：FEISHU_DRY_RUN=1 时只把要发送的内容写到本地文件，不真的调用飞书 webhook。"""
+    if FEISHU_DRY_RUN:
+        with open(dry_run_filename, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"\n🧪 FEISHU_DRY_RUN=1，未真实发送，内容已写入 {dry_run_filename}")
+        return
+
+    response = requests.post(FEISHU_WEBHOOK, json=payload)
+    print(f"\n✅ 飞书推送结果: {response.status_code} - {response.text}")
 
 # === AI HOT RSS 配置 ===
 AIHOT_FEED_URL = "https://aihot.virxact.com/feed.xml"
@@ -553,8 +566,7 @@ def send_to_feishu():
         }
     }
 
-    response = requests.post(FEISHU_WEBHOOK, json=payload)
-    print(f"\n✅ 飞书推送结果: {response.status_code} - {response.text}")
+    post_to_feishu_or_dry_run(payload, "debug_feishu_page_report.json")
 
 # ==== AI HOT RSS 功能 ====
 def strip_html(text):
@@ -842,6 +854,12 @@ def send_aihot_to_feishu():
                 ]
             }
         }
+
+        if FEISHU_DRY_RUN:
+            with open("debug_feishu_aihot_report.json", "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print("\n🧪 FEISHU_DRY_RUN=1，AI HOT 未真实发送，也不更新断点，内容已写入 debug_feishu_aihot_report.json")
+            return
 
         response = requests.post(FEISHU_WEBHOOK, json=payload, timeout=20)
         print(f"\n✅ AI HOT 飞书推送结果: {response.status_code} - {response.text}")
