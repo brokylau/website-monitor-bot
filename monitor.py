@@ -277,6 +277,12 @@ def capture_device(page, url, page_name, device_name, screenshot_path, js_check_
         }
 
     scroll_to_bottom(page)
+
+    try:
+        page.wait_for_selector('button[aria-controls="mobile-navigation"]', timeout=8000)
+    except Exception:
+        pass
+
     is_home_page = page_name == "主页"
     result = page.evaluate(js_check_script, is_home_page)
     result.update({
